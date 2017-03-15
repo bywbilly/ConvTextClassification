@@ -20,15 +20,30 @@ class ConvTextClassfication(object):
         self.args = args
         self.data_reader = Data_reader()
         self.raw_train_data = self.data_reader.read_train_data()
-        #self.raw_test_data = self.data_reader.read_test_data()
+        self.raw_test_data = self.data_reader.read_test_data()
 
         self.feature = Feature(args)
         self.train_data = []
         self.labels = []
+        self.val_data = []
+        self.val_labels = []
         self.test_data = []
 
     def process_data(self):
         self.train_data, self.labels = self.feature.extract_feature(self.raw_train_data)
+        self.test_data = self.feature.extract_test_feature(self.raw_test_data)
+
+    def partition_data(self):
+        
+        num = len(self.train_data)
+        partition_point = num - int(num / 10.0)
+        #print self.labels
+
+        self.val_data = self.train_data[partition_point:]
+        self.val_labels = self.labels[partition_point:]
+        self.train_data = self.train_data[:partition_point]
+        self.labels = self.labels[:partition_point]
+
 
     def _loss(self, logits, L2_loss, labels):
         cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
@@ -93,7 +108,14 @@ class ConvTextClassfication(object):
         self.pred_step  = pred
         self.loss_step  = loss
 
-    def get_batch(self, dataset, index):
+        if self.args.test == 1 and self.args.load_model != '':
+            print 'Restore the model from %s' % self.args.load_model
+            saver = tf.train.Saver()
+            saver.restore(self.sess, self.args.load_model)
+            print 'Finish restoring the model'
+
+
+    def get_batch(self, dataset, labels, index):
         #print 'start getting a batch'
         st = index * self.args.BatchSize
         ed = st + self.args.BatchSize
@@ -103,8 +125,8 @@ class ConvTextClassfication(object):
             return None, None
         ret_x = np.zeros((self.args.BatchSize, self.args.feature, self.args.length), np.float32)
         ret_y = np.zeros((self.args.BatchSize, ), np.int32)
-        #ret_x = np.array(dataset[st:ed])
-        #ret_y = np.array(self.labels[st:ed])
+        ret_x = np.array(dataset[st:ed])
+        ret_y = np.array(labels[st:ed])
         #for i in xrange(st, ed):
         #    print type(dataset[i]['content'])
         #    ret_x[i] = np.array(dataset[i]['content'])
@@ -114,7 +136,22 @@ class ConvTextClassfication(object):
        
         return ret_x, ret_y
 
-    def evaluate(self, dataset):
+    def get_batch_predict(self, dataset, index):
+        st = index * self.args.BatchSize
+        ed = st + self.args.BatchSize
+
+        if ed >= len(dataset):
+            return None
+
+        ret_x = np.zeros((self.args.BatchSize, self.args.feature, self.args.length), np.float32)
+        ret_x = np.array(dataset[st:ed])
+        ret_y = np.zeros((self.args.BatchSize, ), np.int32)
+
+        ret_x = ret_x.reshape(self.args.BatchSize, self.args.feature, self.args.length, 1)
+
+        return ret_x, ret_y
+
+    def evaluate(self, dataset, labels):
         batch_size = self.args.BatchSize
         total_loss = 0.
         total_err = 0.
@@ -122,24 +159,66 @@ class ConvTextClassfication(object):
         now_pos = 0
         print 'start evaluating'
         while True:
-            prepared_x, prepared_y = self.get_batch(dataset, n_batch)
+            prepared_x, prepared_y = self.get_batch(dataset, labels, n_batch)
             if prepared_x is None:
                 break
             feed = {self._x: prepared_x, self._y: prepared_y}
             loss, preds = self.sess.run([self.loss_step, self.pred_step], feed_dict=feed)
+            #print prepared_y[:10]
+            #print preds[:10]
             total_loss += np.mean(loss)
             for i in xrange(len(preds)):
                 if np.argmax(preds[i]) != prepared_y[i]:
                     total_err += 1
 
             n_batch += 1
+            if n_batch > 10:
+                break
 
         loss = total_loss / n_batch
         err = total_err / (n_batch * batch_size)
 
-        print 'evaluate %s: loss = %f err = %f' % (dataset, loss, err)
+        print 'evaluate: loss = %f err = %f' % (loss, err)
         
         return loss, err
+
+    def predict(self, dataset):
+        batch_size = self.args.BatchSize
+        predictions = []
+        n_batch = 0
+        now_pos = 0
+        print 'starting predicting the test dataset'
+        while True:
+            prepared_x, prepared_y = self.get_batch_predict(dataset, n_batch)
+            if prepared_x is None:
+                break
+            feed = {self._x: prepared_x, self._y: prepared_y}
+            _, preds = self.sess.run([self.loss_step, self.pred_step], feed_dict=feed)
+            predictions.extend(preds)
+
+            n_batch += 1
+
+        return predictions
+
+
+
+    def save(self, dirname):
+        try:
+            os.makedirs(dirname)
+        except:
+            pass
+        saver = tf.train.Saver()
+        return saver.save(self.sess, os.path.join(dirname, "model1.ckpt"))
+   
+    def test(self):
+        print 'starting test'
+        predictions = self.predict(self.test_data)
+        with open('ans', 'w') as f:
+            for item in predictions:
+                try:
+                    f.write(item[1])
+                except:
+                    print item
 
     def train(self):
         lr = self.args.lr
@@ -151,7 +230,7 @@ class ConvTextClassfication(object):
             if epoch > 0  and epoch % 3 == 0:
                 lr /= 2.0
             while True:
-                prepared_x, prepared_y = self.get_batch(self.train_data, n_train_batch)
+                prepared_x, prepared_y = self.get_batch(self.train_data, self.labels, n_train_batch)
                 if prepared_x is None:
                     print 'miemiemie'
                     break
@@ -160,9 +239,12 @@ class ConvTextClassfication(object):
                 if n_train_batch % 100 == 0:
                     print 'The iteration is %d train loss is: %f' % (n_train_batch, loss)
                 if n_train_batch % 1000 == 0:
-                    self.evaluate(self.train_data)
+                    self.evaluate(self.val_data, self.val_labels)
 
                 n_train_batch += 1
+        print 'start saving the model'
+        self.save(args.save_model)
+        print 'finish saving the model'
 
 
 if __name__ == '__main__':
@@ -173,6 +255,10 @@ if __name__ == '__main__':
     argparser.add_argument('--length', type=int, default=1018)
     argparser.add_argument('--lr', type=float, default=0.01)
     argparser.add_argument('--num_epoch', type=int, default=30)
+    argparser.add_argument('--load_model', type=str, default='')
+    argparser.add_argument('--save_model', type=str, default='')
+    argparser.add_argument('--test', type=int, default=0)
+    
 
     args = argparser.parse_args()
 
@@ -181,11 +267,17 @@ if __name__ == '__main__':
     print 'start process data'
     model.process_data()
     print 'end prosess data'
+    print 'strat partition data'
+    model.partition_data()
+    print 'end partition data'
     print 'start build model'
     model.build_model()
     print 'end build model'
     print 'start training model'
-    model.train()
+    if args.test == 0:
+        model.train()
+    else:
+        model.test()
     print 'finish training model'
 
     

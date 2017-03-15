@@ -17,6 +17,7 @@ class Feature(object):
         self.data_reader = Data_reader()
         self.args = args
         self.train = []
+        self.test = []
         self.label = []
         self.dict = {}
         self.__process_dic()
@@ -40,27 +41,46 @@ class Feature(object):
                 break
             if c in self.dict:
                 #print c
-                if self.dict[c] < 6:
+                if self.dict[c] < self.args.feature:
                     ret[self.dict[c]][i][0] = 1.0 
                 else:
-                    print '--------'
-                    print c
-                    print self.dict[c]
-                    print '---------'
-                    break
+                    pass
+                    #print '--------'
+                    #print c
+                    #print self.dict[c]
+                    #print '---------'
+                    #break
 
         return ret
 
     def extract_feature(self, train_data):
         for i, item in enumerate(train_data):
-            print 'I am processing the %d training data' % i
+            #print 'I am processing the %d training data' % i
             #feature = train_data[i]
             feature = self.__extract_feature(item['content'])
-            label = 0 if (item['label'] == 'true' or item['label'] == 'false') else item['label']
+            label = item['label']
+            if item['label'] == u'False' or item['label'] == u'True':
+                label = 0
+            else:
+                label = int(item['label'])
+            if label == 1:
+                pass
+                #print 'miaomiaomiao'
+            #print label
             self.train.append(feature)
             self.label.append(label)
 
+        print 'Finish processing the training data'
         return self.train, self.label
+
+    def extract_test_feature(self, test_data):
+        for i, item in enumerate(test_data):
+            #print 'I am processing the %d training data' % i
+            feature = self.__extract_feature(item['content'])
+            self.test.append(feature)
+
+        print 'Finish processing the test data'
+        return self.test
 
 if __name__ == '__main__':
 
